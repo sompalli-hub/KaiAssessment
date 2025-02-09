@@ -6,48 +6,66 @@ import (
 	"io/ioutil"
 	_"os"
 	"log"
-	"path/filepath"
+	_"path/filepath"
+	"net/http"
+	_"strings"
 	pc "payloadcontent"
 )
-func main() {
-	var severitymap map[string][]pc.Vulnerability
-	var totalScans []pc.ScanArray
 
-	// Read all files in the directory
-	files, err := ioutil.ReadDir("/home/ubuntu/KaiAssessment/src/files")
+func fetchJSONFromGitHub(githubRepo, filePath string) ([]pc.ScanArray, error) {
+	rawURL := fmt.Sprintf("https://raw.githubusercontent.com/%s/refs/heads/main/%s",githubRepo, filePath)
+
+
+
+	resp, err := http.Get(rawURL)
 	if err != nil {
-		return
+		return nil, fmt.Errorf("error fetching %s: %v", rawURL, err)
+	}
+	defer resp.Body.Close()
+
+	fmt.Println(resp)
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("error reading response body: %v", err)
 	}
 
-	for _, file := range files {
-		// Process only JSON files
-		fileName := filepath.Join("/home/ubuntu/KaiAssessment/src/files", file.Name())
-		fmt.Println("Processing file:", fileName)
+	var scans []pc.ScanArray
+	err = json.Unmarshal(body, &scans)
+	if err != nil {
+		return nil, fmt.Errorf("error unmarshaling JSON from %s: %v", rawURL, err)
+	}
 
-		// Read the file content
-		data, err := ioutil.ReadFile(fileName)
+	return scans, nil
+}
+
+func main() {
+	//Start a https server and expose two end points
+	//githubRepo := "https://raw.githubusercontent.com/velancio/vulnerability_scans/refs/heads/main/"
+//	jsonFiles := []string{"vulnscan1011.json", "vulnscan1213.json"}
+	severitymap = make(map[string][]pc.Vulnerability)	
+	http.HandleFunc("/scan", handleScan)
+	http.HandleFunc("/query", handleQuery)
+
+	// Start the server on port 8080
+	fmt.Println("Starting server on :8080...")
+	log.Fatal(http.ListenAndServe(":8080", nil))
+
+/*	// Step 2: Fetch and parse each JSON file
+	for _, filePath := range jsonFiles {
+		fmt.Println("Fetching:", filePath)
+
+		scans, err := fetchJSONFromGitHub(githubRepo, filePath)
 		if err != nil {
-			log.Printf("Error reading file %s: %v", fileName, err)
+			log.Println("Error fetching JSON:", err)
 			continue
 		}
 
-		// Unmarshal JSON into a slice of ScanData
-		var scans []pc.ScanArray
-		err = json.Unmarshal([]byte(data), &scans)
-		if err != nil {
-			log.Printf("Error unmarshaling JSON in file %s: %v", fileName, err)
-			continue
-		}
-		fmt.Println(scans)
-
-		// Append to the master list
-		for _,scan := range scans {
+		for _, scan := range scans {
 			totalScans = append(totalScans, scan)
 		}
 	}
 
-
-	severitymap = make(map[string][]pc.Vulnerability)
 //	fmt.Println(severitymap)
 
 	// Print the parsed data
@@ -67,4 +85,5 @@ func main() {
 		}
 		fmt.Println()
 	}		
+*/
 }
