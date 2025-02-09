@@ -1,10 +1,5 @@
 package payloadcontent
 
-import (
-	_"fmt"
-	_"time"
-)
-
 type ScanMetadata struct {
         ScannerVersion  string   `json:"scanner_version"`
         PoliciesVersion string  `json:"policies_version"`
@@ -45,7 +40,6 @@ type ScanResults struct {
         ScanMetadata     ScanMetadata    `json:"scan_metadata"`
 }
 
-// Define the top-level struct that contains scanResults
 type ScanArray struct {
 	KeyScanResult ScanResults `json:"scanResults"`
 }
