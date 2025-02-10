@@ -6,10 +6,51 @@ import (
 	"log"
 	"net/http"
 	"io/ioutil"
+	"sync"
 	pc "payloadcontent"
 )
 var severitymap map[string][]pc.Vulnerability
 var totalScans []pc.ScanArray
+var mu sync.RWMutex // Mutex for concurrency
+
+// Function to fetch and parse a JSON file from GitHub
+func fetchJSONFromGitHub(githubRepo, filePath string, wg *sync.WaitGroup) {
+        defer wg.Done() 
+        rawURL := fmt.Sprintf("https://raw.githubusercontent.com/%s/refs/heads/main/%s",githubRepo, filePath)
+	fmt.Printf("Accessing File :%s \n", filePath)
+
+        resp, err := http.Get(rawURL)
+        if err != nil {
+                log.Printf("Error fetching file %s: %v", filePath, err)
+                return
+        }
+        defer resp.Body.Close()
+
+        if resp.StatusCode != http.StatusOK {
+                log.Printf("Failed to fetch file %s: Status %d", filePath, resp.StatusCode)
+                return
+        }
+
+        body, err := ioutil.ReadAll(resp.Body)
+        if err != nil {
+                log.Printf("Failed to fetch file %s: Status %d", filePath, resp.StatusCode)
+                return
+        }
+
+        var scans []pc.ScanArray
+        err = json.Unmarshal(body, &scans)
+        if err != nil {
+                log.Printf("Error reading file %s: %v", filePath, err)
+                return
+        }
+
+        // Store scan results safely using a mutex
+        mu.Lock()
+        for _, scan := range scans {
+                totalScans = append(totalScans, scan)
+        }
+        mu.Unlock()
+}
 
 // Handle the POST /scan endpoint to fetch JSON from GitHub and process it
 func handleScan(w http.ResponseWriter, r *http.Request) {
@@ -19,63 +60,37 @@ func handleScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Extract the GitHub repository and file path from the request body
-	var requestData struct {
-		Repo     string `json:"repo"`  // Full repo URL (e.g., "username/repo")
-		FileNames []string `json:"filenames"` // JSON files within the repo
-	}
-
-	decoder := json.NewDecoder(r.Body)
-	if err := decoder.Decode(&requestData); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	var scanRequest pc.PostScan
+	body, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Error reading request body", http.StatusInternalServerError)
 		return
 	}
 
-	// Construct the raw URL to fetch the JSON file
-	//rawURL := fmt.Sprintf("https://raw.githubusercontent.com/%s/refs/heads/main/",repo)
+	if err := json.Unmarshal(body, &scanRequest); err != nil {
+		http.Error(w, "Error unmarshaling request", http.StatusBadRequest)
+		return
+	}
 
-	// Step 2: Fetch and parse each JSON file
-        for _, fileName := range requestData.FileNames {
-                fmt.Println("Fetching:", fileName)
+	// Process multiple files concurrently
+	var wg sync.WaitGroup
+	for _, fileName := range scanRequest.Files {
+		wg.Add(1)
+		go fetchJSONFromGitHub(scanRequest.Repo, fileName, &wg)
+	}
+	wg.Wait() // Wait for all Goroutines to complete
 
-                scans, err := fetchJSONFromGitHub(requestData.Repo, fileName)
-                if err != nil {
-                        log.Println("Error fetching JSON:", err)
-                        continue
-                }
-
-                for _, scan := range scans {
-                        totalScans = append(totalScans, scan)
-                }
-        }
-
+	mu.Lock()
         for _, scan := range totalScans {
 		for _, vul := range scan.KeyScanResult.Vulnerabilities {
                         fmt.Printf("Severity: %s \n",vul.Severity)
                         severitymap[vul.Severity] = append(severitymap[vul.Severity], vul)
                 }
         }
+	mu.Unlock()
 
-        //fmt.Println(severitymap)
-
-        for key, values := range severitymap {
-                fmt.Printf("key:  %s \n", key)
-                for _, val := range values {
-                        fmt.Printf("value: %s \n", val)
-                }
-                fmt.Println()
-        }
-
-
-	// Respond with the scan data
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(totalScans)
-}
-
-type PostQuery struct {
- 	Filters struct {
-		Severity string `json:"severity"`
-	} `json:"filters"`
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, "Repository file contents fetched and store locally")
 }
 
 
@@ -94,7 +109,7 @@ func handleQuery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Parse the filter request
-	var query PostQuery
+	var query pc.PostQuery
 	if err := json.Unmarshal(body, &query); err != nil {
 		http.Error(w, "Error unmarshaling filter request", http.StatusInternalServerError)
 		return
@@ -103,13 +118,21 @@ func handleQuery(w http.ResponseWriter, r *http.Request) {
 	severity := query.Filters.Severity
 
 	var sevResults []pc.Vulnerability
+	mu.RLock()
 	for sev,result := range severitymap {
 		if sev == severity {
 			sevResults = result
 		}
 	}
+	mu.RUnlock()
 
-	// Respond with the filtered results
+	queryrsp, err := json.Marshal(sevResults)
+	if err != nil {
+		http.Error(w, "Error encoding response", http.StatusInternalServerError)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(sevResults)
+	w.WriteHeader(http.StatusOK)
+	w.Write(queryrsp)
 }

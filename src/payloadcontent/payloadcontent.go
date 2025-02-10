@@ -44,4 +44,18 @@ type ScanArray struct {
 	KeyScanResult ScanResults `json:"scanResults"`
 }
 
+//content for the scan API
+type PostScan struct {
+        Repo      string   `json:"repo"` 
+        Files    []string `json:"files"`
+} 
+
+//content for the query API
+type PostQuery struct {
+        Filters struct {
+                Severity string `json:"severity"`
+        } `json:"filters"`
+}
+
+
 
